@@ -82,10 +82,10 @@ def init_polygon(_all,_x,_y,_mp,_gp,_params, _bins,_mindist, barargs):
     all_points,a,b, mp_sorted_coords, grouped_pts, parameters, pol_bins, mindist = _all,_x,_y, _mp, _gp, _params, _bins, _mindist
 
 
-def init_worker_pdb(Gsorted_indx, barargs):
+def init_custom_writer(_sorted_indx,_fmt,barargs):
     tqdm.tqdm.set_lock(barargs)
-    global sorted_indx
-    sorted_indx = Gsorted_indx
+    global sorted_indx, format
+    sorted_indx, format = _sorted_indx, _fmt
 
 
 def det_min_frames(j):
@@ -374,11 +374,12 @@ def printout(i):
         ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[sorted_indx[i]])
 
       
-def printout_pdb_cp2k(i):
+def printout_custom(i):
     if args.stride > 1:
         sorted_indx[i] = [args.stride*q for q in sorted_indx[i]]
+    end = 'cfg' if format == 'cfg' else 'pdb'
     linecount, printcount = 0, 0
-    with open(f'minima/min_{i}.pdb', 'w') as minfile:
+    with open(f'minima/min_{i}.'+end, 'w') as minfile:
         with open(args.traj, 'r') as ftraj:
             with tqdm.tqdm(total=len(sorted_indx[i]), desc=f'writing min {i}', 
             position=tqdm.tqdm._get_free_pos()+i, leave=False) as pbar:
@@ -412,6 +413,21 @@ def printout_pdb_cp2k_prework():
             elif line.startswith('AUTHOR') or line.startswith('TITLE'):
                 head += 1
     return int((line_count-head)/(atom_count+3))
+
+
+def printout_cfg_prework():
+    try:
+        output = subprocess.Popen(['wc', '-l', args.traj], stdout=subprocess.PIPE).communicate()[0]
+        line_count = int(output.decode('utf-8').split()[0])
+    except FileNotFoundError:
+        with open(args.traj, 'rb') as bfile:
+            line_count = sum(1 for _ in bfile)
+    with open(args.traj, 'r') as tfile:
+        for i,line in enumerate(tfile):
+            if line.startswith('END_CFG'):
+                per_frame = i+2
+                break
+    return int(line_count/per_frame)
 
 
 if __name__ == '__main__':
@@ -517,16 +533,20 @@ if __name__ == '__main__':
         else:
             u = mda.Universe(args.topo, args.traj, atom_style='atomic')
         ag = u.select_atoms('all')
+        format = 'MDAnalysis'
         if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
             raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
-    except IndexError:
+    except (IndexError, ValueError):
         if args.traj.endswith('.pdb'):
             frame_count = printout_pdb_cp2k_prework()
-            cp2k_pdb = True
-            if not int((frame_count-1)/args.stride+1) == len(a):
-                raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
+            format = 'cp2k_pdb'
+        elif args.traj.endswith('.cfg'):
+            frame_count = printout_cfg_prework()
+            format = 'cfg'
         else:
             raise Exception('MDAnalysis does not support this topology- or trajectory-file')
+        if not int((frame_count-1)/args.stride+1) == len(a):
+            raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
     except FileNotFoundError:
         raise
     print('done')
@@ -657,14 +677,12 @@ if __name__ == '__main__':
             else:
                 overviewfile.writelines(f'min_{i} : {fes_var[pos_cvs_fes[0]+2]}: {round(np.mean(grouped_points[i], axis=0)[0],4)} '\
                 f'{fes_var[pos_cvs_fes[1]+2]}: {round(np.mean(grouped_points[i], axis=0)[1],4)}\n')
-    if cp2k_pdb == False:
+    if format == 'MDAnalysis':
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='printing to file', leave=False):
             printout(i)
     else:
-        with mp.Pool(processes = usable_cpu, initializer=init_worker_pdb, initargs=(sorted_indx,mp.RLock(),)) as pool:
-            pool.map(printout_pdb_cp2k, range(len(sorted_indx)))
+        with mp.Pool(processes = usable_cpu, initializer=init_custom_writer, initargs=(sorted_indx,format,mp.RLock(),)) as pool:
+            pool.map(printout_custom, range(len(sorted_indx)))
 
-    print(f'time needed for postprocessing step: {round(time.perf_counter() - start3,3)} s')
-    print(' '*terminal_size)
+    print(f'time needed for postprocessing step: {round(time.perf_counter() - start3,3)} s\n')
     print(' '*int((terminal_size-len(termin))/2) + termin + ' '*int((terminal_size-len(termin))/2))
-
