@@ -5,11 +5,13 @@ Main differences:
 - no PLUMED dependancy anymore:
   - if no FES-file provided: Histogram creation from COLVAR-file
   - read columns manually setable for COLVAR- and FES-files
-- Pre-sorting of trajectory and therefore significant speed increase
-- Compatible with MLIPs CFG-format (https://doi.org/10.1063/5.0155887) read+write
-- Multiple trajectory- and COLVAR-files can be concatenated
+- pre-sorting of trajectory and therefore significant speed increase
+- compatible with MLIPs CFG-format (https://doi.org/10.1063/5.0155887) read+write
+- multiple trajectory- and COLVAR-files can be concatenated
+- (minor) FES-png now shows the true polygon outlines
 
 This is purely experimental and highly work-in-progress
 
-possible future additions:
+Possible future additions:
 - output of only unique structures
+- preview only mode (only outputing the FES-png + outlines)
