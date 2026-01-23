@@ -1,11 +1,11 @@
 import numpy as np
 import os
-import shapely
 import tqdm
 import multiprocessing as mp
 import matplotlib.pyplot as plt
-import argparse
 
+from argparse import ArgumentParser
+from shapely import Polygon, Point
 from subprocess import run
 from time import perf_counter
 from copy import deepcopy
@@ -18,10 +18,11 @@ from MDAnalysis import Universe
 from collections import defaultdict
 from sys import exit
 
+
 filterwarnings('ignore', category=UserWarning)
 filterwarnings('ignore', category=RuntimeWarning)
 
-parser = argparse.ArgumentParser()
+parser = ArgumentParser()
 
 # INPUT
 parser.add_argument('-traj', '--trajectory', dest='traj', required=True, nargs='+',
@@ -100,16 +101,9 @@ def init_custom_writer(_sorted_indx,_fmt,barargs):
 
 
 def det_min_frames(j):
-    polygon = shapely.Polygon(grouped_pts[j])
-    convex_hull = polygon.convex_hull
-    try:
-        if abs(1-(polygon.area/convex_hull.area)) > 0.4:
-            polygon = convex_hull
-            stdout(f'polygon {j} did not initialize properly, using convex-hull')
-    except ZeroDivisionError:
-        pass
+    polygon = Polygon(grouped_pts[j]).buffer(0)
 
-    pol_fill = [fes_bin for fes_bin in pol_bins if polygon.distance(shapely.Point(fes_bin)) <= mindist]
+    pol_fill = [fes_bin for fes_bin in pol_bins if polygon.distance(Point(fes_bin)) <= mindist]
     pol_fill_keys = pos_polygon(parameters, pol_fill)
     indxes = [] 
     tol = np.sqrt(parameters[3]**2+parameters[2]**2)
@@ -117,14 +111,22 @@ def det_min_frames(j):
         for key in pol_fill_keys:
             try:
                 for point in all_points[key]:
-                    if polygon.distance(shapely.Point([a[point],b[point]])) <= tol:
+                    if polygon.distance(Point([a[point],b[point]])) <= tol:
                         indxes.append(point)
             except KeyError:
                 pass
             pbar.update(1)
         mp_sorted_coords[j] = indxes
-    return [np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])),
-            parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))]
+    
+    try:
+        return [[np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))],
+                [parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))]]
+    except AttributeError:
+        final_x, final_y = [], []
+        for poly in polygon.geoms:
+            final_x.append(np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
+            final_y.append(parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
+        return [final_x,final_y]
 
 
 def have_common_elem(l1, l2):
@@ -426,7 +428,7 @@ def stdout(string, center=False, end='\n', start=''):
     except OSError:
         terminal_size = len(string)
     if not center:
-        print(start+string+(terminal_size-len(string))*' ', end=end, flush=True)
+        print(start+string, end=end, flush=True)
     else:
         tempstr = ' '*int((terminal_size-len(string+start))/2)
         print(start+tempstr+string+tempstr, flush=True)
@@ -460,7 +462,11 @@ if __name__ == '__main__':
 
     a, b = [], []
     for element in args.colvar:
-        a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float, delimiter=';')
+        try:
+            a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float, delimiter=';')
+        except UnicodeDecodeError:
+            tmp = np.load(element)
+            a_tmp, b_tmp = tmp[:,0],tmp[:,1]
         a.append(a_tmp)
         b.append(b_tmp)
     
@@ -477,7 +483,8 @@ if __name__ == '__main__':
     
     if args.thresh == None:
         if not args.fes == None:
-            args.thresh = np.max(ener2d) - abs(np.max(ener2d)-np.min(ener2d))*(1-1/12)
+            max_ener = np.max(ener2d)
+            args.thresh = max_ener - abs(max_ener-np.min(ener2d))*(1-1/12)
             stdout('automatically determined', end=' ') 
         else:
             raise Exception('Cannot use automatic threshold detection with histogram mode')
@@ -596,8 +603,8 @@ if __name__ == '__main__':
                  initargs=(all_points, a, b, mp_sorted_coords, grouped_points,
                           parameters, pol_bins, args.mindist,mp.RLock())) as pool:
         for exterior in pool.map(det_min_frames, range(len(grouped_points))):
-            exteriors_x.append(exterior[0])
-            exteriors_y.append(exterior[1])
+            exteriors_x += exterior[0]
+            exteriors_y += exterior[1]
     sorted_indx = list(mp_sorted_coords)
     for lists in sorted_indx:
         lists.sort()
@@ -625,7 +632,7 @@ if __name__ == '__main__':
         plt.axis('tight')
         plt.title(f'threshold: {round(args.thresh,3)} a.U.')
         for i in range(len(exteriors_x)):
-            plt.plot(exteriors_x[i], exteriors_y[i], '.', color='white', ms=2)
+            plt.plot(exteriors_x[i], exteriors_y[i], '-', color='white', lw=0.5)
         cb = plt.colorbar(label='free energy [a.U.]', format="{x:.0f}")
         tick_locator = ticker.MaxNLocator(nbins=8)
         cb.locator = tick_locator
