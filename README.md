@@ -17,8 +17,8 @@ Main differences:
   - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
   - Preview Mode: only generate FES-png (no trajectory files are written) -> "--png only"
 
-This is still highly work-in-progress and subject to change at any point
-If you are using this in your work, cite the published version
+This is still highly work-in-progress and subject to change at any point \
+If you are using this in your work, cite the published version above
 
 Possible future additions:
 - output of only unique structures (maybe as standalone script)
