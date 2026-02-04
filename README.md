@@ -1,4 +1,4 @@
-To the finished and published version: https://github.com/vi-rwth/FESTA.git \
+To the published version: https://github.com/vi-rwth/FESTA.git \
 To the publication: https://pubs.acs.org/doi/full/10.1021/acs.jcim.4c01022
 
 Main differences:
@@ -11,14 +11,14 @@ Main differences:
 - increased accuracy:
   - no convex hull approximation anymore, if creation of single Polygon fails -> MultiPolygon
 - increased speed:
-  - pre-sorting of trajectory -> not all frames are evaluated
-- small quality of life improvements:
+  - Spatial Hashing algorithm -> not all frames are evaluated
+  - Distance calculation now multicore
+  - Frame extraction in binary mode for CFG+PDB
+- quality of life improvements:
   - multiple trajectory- and COLVAR-files can now be concatenated
   - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
   - Preview Mode: only generate FES-png (no trajectory files are written) -> "--png only"
+  - Representative Frame: only output the single most representative frame of each minimum -> "--stride 0"
 
 This is still highly work-in-progress and subject to change at any point \
 If you are using this in your work, cite the published version above
-
-Possible future additions:
-- output of only unique structures (maybe as standalone script)
