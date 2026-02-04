@@ -12,13 +12,14 @@ Main differences:
   - no convex hull approximation anymore, if creation of single Polygon fails -> MultiPolygon
 - increased speed:
   - Spatial Hashing algorithm -> not all frames are evaluated
-  - Distance calculation now multicore
-  - Frame extraction in binary mode for CFG+PDB
+  - polygon distance calculation now multicore
+  - frame extraction in binary mode for CFG+PDB
+  - various other speed improvements
 - quality of life improvements:
-  - multiple trajectory- and COLVAR-files can now be concatenated
+  - multiple trajectory- and COLVAR-files can now be concatenated (bash glob supported)
   - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
   - Preview Mode: only generate FES-png (no trajectory files are written) -> "--png only"
-  - Representative Frame: only output the single most representative frame of each minimum -> "--stride 0"
+  - Representative Frame: only outputs single most representative frame of each minimum -> "--stride 0"
 
 This is still highly work-in-progress and subject to change at any point \
 If you are using this in your work, cite the published version above
