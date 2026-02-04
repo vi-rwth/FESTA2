@@ -3,9 +3,10 @@ import os
 import tqdm
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+import shapely.wkb
+import shapely
 
 from argparse import ArgumentParser
-from shapely import Polygon, Point
 from subprocess import run
 from time import perf_counter
 from copy import deepcopy
@@ -17,6 +18,7 @@ from matplotlib import ticker
 from MDAnalysis import Universe
 from collections import defaultdict
 from sys import exit
+from re import split
 
 
 filterwarnings('ignore', category=UserWarning)
@@ -36,8 +38,7 @@ parser.add_argument('-topo', '--topology', dest='topo', default=None,
                     type=str)
     
 parser.add_argument('-fes', '--fes', dest='fes', default=None,
-                    help='FES-file name in the MD-output-directory. '\
-                    'DEFAULT: None',
+                    help='FES-file name in the MD-output-directory. DEFAULT: None',
                     type=str)
 
 parser.add_argument('-cv', '--colvar', dest='colvar', default='COLVAR', nargs='+',
@@ -66,8 +67,8 @@ parser.add_argument('-mindist', '--mindist', dest='mindist', default=None,
 
 # OPTIONAL
 parser.add_argument('-stride', '--stride', dest='stride', default=1,
-                    help='Reads only every n-th frame of trajectory. DEFAULT: 1.',
-                    type=int)
+                    help='Reads only every n-th frame of trajectory. If 0 then only outputs a single frame per '\
+                        'minimum. DEFAULT: 1.', type=int)
 
 parser.add_argument('-png', '--png', dest='fes_png', default='True', choices=('True','False','only'),
                     help='Specifies whether a PNG-visualization of the FES should be created (True/False) '\
@@ -86,47 +87,15 @@ parser.add_argument('-md', '--md', dest='md_dir', default=os.getcwd(),
 args = parser.parse_args()
 
 
-def init_polygon(_all,_x,_y,_mp,_gp,_params, _bins,_mindist, barargs):
+def init_polygon(_singl,_tol):
+    global single,tol
+    single,tol = _singl,_tol
+
+
+def init_custom_writer(_sorted_indx,_fmt,_skoff,_cstraj,_str,_traj,barargs):
     tqdm.tqdm.set_lock(barargs)
-    global mp_sorted_coords, grouped_pts
-    global all_points, pol_bins, a,b 
-    global parameters, mindist
-    all_points,a,b, mp_sorted_coords, grouped_pts, parameters, pol_bins, mindist = _all,_x,_y, _mp, _gp, _params, _bins, _mindist
-
-
-def init_custom_writer(_sorted_indx,_fmt,barargs):
-    tqdm.tqdm.set_lock(barargs)
-    global sorted_indx, format
-    sorted_indx, format = _sorted_indx, _fmt
-
-
-def det_min_frames(j):
-    polygon = Polygon(grouped_pts[j]).buffer(0)
-
-    pol_fill = [fes_bin for fes_bin in pol_bins if polygon.distance(Point(fes_bin)) <= mindist]
-    pol_fill_keys = pos_polygon(parameters, pol_fill)
-    indxes = [] 
-    tol = np.sqrt(parameters[3]**2+parameters[2]**2)
-    with tqdm.tqdm(total=len(pol_fill_keys), desc=f'min {j}', position=tqdm.tqdm._get_free_pos()+j, leave=False) as pbar:
-        for key in pol_fill_keys:
-            try:
-                for point in all_points[key]:
-                    if polygon.distance(Point([a[point],b[point]])) <= tol:
-                        indxes.append(point)
-            except KeyError:
-                pass
-            pbar.update(1)
-        mp_sorted_coords[j] = indxes
-    
-    try:
-        return [[np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))],
-                [parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))]]
-    except AttributeError:
-        final_x, final_y = [], []
-        for poly in polygon.geoms:
-            final_x.append(np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
-            final_y.append(parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
-        return [final_x,final_y]
+    global sorted_indx, format, seek_offset, cumsum_traj, trajl, stride
+    sorted_indx, format, seek_offset, cumsum_traj, trajl, stride = _sorted_indx, _fmt, _skoff, _cstraj, _traj, _str
 
 
 def have_common_elem(l1, l2):
@@ -134,6 +103,34 @@ def have_common_elem(l1, l2):
         if countOf(l1, elem) > 0:
             return True
     return False
+    
+
+def process_chunk(task_data):
+    indices, poly_wkb, a, b = task_data
+    polygon = shapely.wkb.loads(poly_wkb)
+    
+    points_geom = shapely.points(a, b)
+    dists = shapely.distance(polygon, points_geom)
+    mask = dists <= tol
+    valid_indices = indices[mask]
+    if single and np.any(mask):
+        distance_list = shapely.distance(polygon.centroid, points_geom[mask])
+        return [valid_indices[np.argmin(distance_list)]]
+    else:
+        return valid_indices
+
+    
+def pos_polygon(parameters, pts):
+    new_grid_dimX = int(parameters[8]/(4*np.sqrt(parameters[2]**2+parameters[3]**2)))
+    bin_cutoffX = parameters[8]/new_grid_dimX
+    bin_cutoffY = parameters[9]/new_grid_dimX    
+    center_ids = ((pts[:,0]-parameters[4])/bin_cutoffX).astype(np.int32)+((pts[:,1]-parameters[5])/bin_cutoffY).astype(np.int32)*new_grid_dimX
+    
+    offsets = np.array([0, -1, 1, new_grid_dimX, -new_grid_dimX, 
+                        new_grid_dimX+1, -new_grid_dimX-1, new_grid_dimX-1, -new_grid_dimX+1], dtype=np.int32)
+    
+    all_ids = (center_ids[:,None]+offsets).ravel()
+    return set(all_ids)
 
 
 def fes_gen_histo(a,b):
@@ -227,30 +224,13 @@ def hash_colv(parameters,x,y):
     new_grid_dimX = int(parameters[8]/(4*np.sqrt(parameters[2]**2+parameters[3]**2)))
     bin_cutoffX = parameters[8]/new_grid_dimX
     bin_cutoffY = parameters[9]/new_grid_dimX
+
     hash_tab = defaultdict(list)
-    for i in tqdm.tqdm(range(len(x)), desc='filling hashmap', leave=False):
-        pos = int((x[i]-parameters[4])/bin_cutoffX) + int((y[i]-parameters[5])/bin_cutoffY) * new_grid_dimX
-        hash_tab[pos].append(i)
+    cell_ids = ((x-parameters[4])/bin_cutoffX).astype(np.int64) + ((y-parameters[5])/bin_cutoffY).astype(np.int64)* new_grid_dimX
+
+    for i in tqdm.tqdm(range(len(cell_ids)), desc='filling hashmap', leave=False):
+        hash_tab[cell_ids[i]].append(i)
     return hash_tab
-    
-    
-def pos_polygon(parameters, pts):
-    new_grid_dimX = int(parameters[8]/(4*np.sqrt(parameters[2]**2+parameters[3]**2)))
-    bin_cutoffX = parameters[8]/new_grid_dimX
-    bin_cutoffY = parameters[9]/new_grid_dimX
-    pos_pol_pts = set()
-    for pt in pts:
-        pos = int((pt[0]-parameters[4])/bin_cutoffX) + int((pt[1]-parameters[5])/bin_cutoffY) * new_grid_dimX
-        pos_pol_pts.add(pos)
-        pos_pol_pts.add(pos-1)
-        pos_pol_pts.add(pos+1)
-        pos_pol_pts.add(pos+new_grid_dimX)
-        pos_pol_pts.add(pos-new_grid_dimX)
-        pos_pol_pts.add(pos+new_grid_dimX+1)
-        pos_pol_pts.add(pos-new_grid_dimX-1)
-        pos_pol_pts.add(pos+new_grid_dimX-1)
-        pos_pol_pts.add(pos-new_grid_dimX+1)
-    return pos_pol_pts
 
 
 def ex3(hash_tab, new_grid_dimX, max_diff):
@@ -374,52 +354,54 @@ def ex3(hash_tab, new_grid_dimX, max_diff):
     
 
 def printout(i):
-    if args.stride > 1:
-        sorted_indx[i] = [args.stride*q for q in sorted_indx[i]]
+    curr_indx = [args.stride*q for q in sorted_indx[i]] if args.stride > 1 else sorted_indx[i]
     try:
-        ag.write(f'minima/min_{i}.{args.traj[0].split(".")[-1]}', frames=u.trajectory[sorted_indx[i]])
+        ag.write(f'minima/min_{i}.{args.traj[0].split(".")[-1]}', frames=u.trajectory[curr_indx])
     except (TypeError, ValueError):
         #print(f'MDAnalysis does not support writing in {args.traj.split(".")[-1]}-format, writing in pdb-format instead')
-        ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[sorted_indx[i]])
+        ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[curr_indx])
 
-      
+
 def printout_custom(i):
-    if args.stride > 1:
-        sorted_indx[i] = [args.stride*q for q in sorted_indx[i]]
+    curr_indx = [stride*q for q in sorted_indx[i]] if stride > 1 else sorted_indx[i]
     end = 'cfg' if format == 'cfg' else 'pdb'
-    linecount, printcount = 0, 0
     with open(f'minima/min_{i}.'+end, 'w') as minfile:
-        with tqdm.tqdm(total=len(sorted_indx[i]), desc=f'writing min {i}', 
+        with tqdm.tqdm(total=len(curr_indx), desc=f'writing min {i}', 
                 position=tqdm.tqdm._get_free_pos()+i, leave=False) as pbar:
-            for element in args.traj:
-                with open(element, 'r') as ftraj:
-                    for line in ftraj:
-                        try:
-                            if sorted_indx[i][printcount] == linecount:
-                                minfile.write(line)
-                                if line.startswith('END'):
-                                    printcount += 1
-                                    pbar.update(1)
-                        except IndexError:
-                            break
+            for idx in curr_indx:
+                file_index = np.searchsorted(cumsum_traj, idx, side='right')
+                file_seek_idx = idx-cumsum_traj[file_index-1] if file_index > 0 else idx
+                with open(trajl[file_index], 'rb') as ftraj:
+                    ftraj.seek(seek_offset[file_index][file_seek_idx])
+                    for line_bytes in ftraj:
+                        line = line_bytes.decode('utf-8')
+                        minfile.write(line)
                         if line.startswith('END'):
-                            linecount += 1
+                            break
 
 
 def printout_prework(end):
-    lookstr = 'BEGIN_CFG' if end == 'cfg' else 'END'
-    totalframes = 0
-    try:
-        for filename in args.traj:
-            output = run(['grep','-c',f'^{lookstr}',filename], shell=False, capture_output=True, text=True)
-            totalframes += int(output.stdout)
-    except FileNotFoundError:
-        for filename in args.traj:
-            with open(filename,'r') as f:
+    lookstr = 'BEGIN_CFG' if end == 'cfg' else 'CRYST1'
+    file_offset = []
+    traj_len = np.empty(len(args.traj), dtype=np.uint64)
+    try: #UNIX
+        for i,filename in enumerate(args.traj):
+            result = run(f"grep -b '^{lookstr}' {filename} | cut -d: -f1", shell=True, capture_output=True, text=True)
+            seek_offset = np.fromstring(result.stdout, dtype=int, sep='\n')
+            file_offset.append(seek_offset)
+            traj_len[i] = len(seek_offset)
+    except FileNotFoundError: #WINDOWS
+        for i,filename in enumerate(args.traj):
+            seek_offset = []
+            with open(filename,'rb') as f:
+                line_offset = 0
                 for line in f:
                     if line.startswith(lookstr):
-                        totalframes += 1
-    return totalframes
+                        seek_offset.append(line_offset)
+                    line_offset += len(line)
+            file_offset.append(seek_offset)
+            traj_len[i] = len(seek_offset)
+    return file_offset, traj_len
 
 
 def stdout(string, center=False, end='\n', start=''):
@@ -444,6 +426,8 @@ if __name__ == '__main__':
     stdout(version, center=True)
     stdout(f'working directory: {args.md_dir}', start='\n')
     os.chdir(args.md_dir)
+    args.colvar = sorted(args.colvar, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
+    args.traj = sorted(args.traj, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
 
     pos_cvs_fes = (0,1)
     pos_ener = 2
@@ -472,11 +456,14 @@ if __name__ == '__main__':
     
     a = np.concatenate(a)
     b = np.concatenate(b)
-    
-    if not args.fes == None:
-        parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener)
+
+    if args.stride == 0:
+        args.stride = 1
+        single = True
     else:
-        parameters, ener2d, coords = fes_gen_histo(a,b)
+        single = False
+    
+    parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b)
 
     if args.stride > 1:
         a, b = a[0::args.stride], b[0::args.stride]
@@ -537,11 +524,11 @@ if __name__ == '__main__':
             format = 'cfg'
         else:
             raise Exception('MDAnalysis does not support this topology- or trajectory-file')
-        frame_count = printout_prework(format)
+        seek_offset, traj_len = printout_prework(format)
+        frame_count = sum(traj_len)
+        cumsum_traj = np.cumsum(traj_len)
         if not int((frame_count-1)/args.stride+1) == len(a):
             raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
-    except FileNotFoundError:
-        raise
     print('done')
     
     print('executing CCL step ... ', end='', flush=True)
@@ -595,21 +582,54 @@ if __name__ == '__main__':
 
     all_points = hash_colv(parameters, a, b)
     
-    usable_cpu = os.cpu_count()-1 if len(grouped_points)>os.cpu_count()-1 else len(grouped_points)
+    usable_cpu = os.cpu_count()
+    sorted_indx, exteriors_x, exteriors_y = [], [], []
+    tol = np.sqrt(parameters[3]**2 + parameters[2]**2)
+    with mp.Pool(processes=usable_cpu, initializer=init_polygon, initargs=(single,tol), maxtasksperchild=100) as pool:
+        for j in tqdm.tqdm(range(len(grouped_points)), desc='polygon distance', leave=False):
+            polygon = shapely.Polygon(grouped_points[j]).buffer(0) 
+            poly_wkb = shapely.wkb.dumps(polygon)
+            
+            pol_fill = np.array([fes_bin for fes_bin in pol_bins if polygon.distance(shapely.Point(fes_bin)) <= args.mindist])
+            pol_fill_keys = pos_polygon(parameters, pol_fill)
+            candidate_indices = []
+            for key in pol_fill_keys:
+                candidate_indices.extend(all_points.get(key, []))
+            
+            candidate_indices = np.array(candidate_indices, dtype=np.uint64)
+            num_chunks = int(np.ceil(len(candidate_indices)/50000))
+            num_chunks = max(num_chunks, usable_cpu*4)
 
-    exteriors_x, exteriors_y = [], []
-    mp_sorted_coords = mp.Manager().list([[] for _ in range(len(grouped_points))])
-    with mp.Pool(processes=usable_cpu, initializer=init_polygon, 
-                 initargs=(all_points, a, b, mp_sorted_coords, grouped_points,
-                          parameters, pol_bins, args.mindist,mp.RLock())) as pool:
-        for exterior in pool.map(det_min_frames, range(len(grouped_points))):
-            exteriors_x += exterior[0]
-            exteriors_y += exterior[1]
-    sorted_indx = list(mp_sorted_coords)
-    for lists in sorted_indx:
-        lists.sort()
-        tot_min_frames += len(lists)
+            if len(candidate_indices) < 200000:
+                final_indices = process_chunk((candidate_indices, poly_wkb, a[candidate_indices], b[candidate_indices]))
+            else:
+                chunks = np.array_split(candidate_indices, num_chunks)
+                tasks = [(chunk, poly_wkb, a[chunk], b[chunk]) for chunk in chunks]
+                
+                final_indices = []
+                for r_idx in pool.imap_unordered(process_chunk, tasks):
+                    if len(r_idx) > 0:
+                        final_indices.extend(r_idx)
 
+            if single:      
+                distance_list = shapely.distance(polygon.centroid, shapely.points(a[final_indices], b[final_indices]))
+                sorted_indx.append([final_indices[np.argmin(distance_list)]])
+            else:
+                final_indices.sort()
+                sorted_indx.append(final_indices)
+            tot_min_frames += len(sorted_indx[-1])
+            
+            try:
+                exteriors_x.append(np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
+                exteriors_y.append(parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
+            except AttributeError:
+                exteriors_x_tmp, exteriors_y_tmp = [], []
+                for poly in polygon.geoms:
+                    exteriors_x_tmp += (np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))).tolist()
+                    exteriors_y_tmp += (parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))).tolist()
+                exteriors_x.append(exteriors_x_tmp)
+                exteriors_y.append(exteriors_y_tmp)
+    
     stdout(f'processed {len(a)} frames')
     stdout(f'found {tot_min_frames} minima frames')
     if tot_min_frames/len(a) > 0.9:
@@ -643,7 +663,7 @@ if __name__ == '__main__':
             exit()
     
     desc = []
-    if periodicity == True:
+    if periodicity:
         sorted_coords_period, tot_pbc  = [], []
         for elem in pbc:
             desc.append(' + '.join((f'CV1: {round(np.mean(grouped_points[j], axis=0)[0],4)} '\
@@ -664,7 +684,6 @@ if __name__ == '__main__':
         print(str(len(sorted_indx)), end=' ')
         print('minimum identified') if len(sorted_indx) == 1 else print('minima identified')
             
-
     start3 = perf_counter()
     with open('minima/min_overview.txt', 'w') as overviewfile:
         for i in range(len(sorted_indx)):
@@ -677,7 +696,9 @@ if __name__ == '__main__':
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='printing to file', leave=False):
             printout(i)
     else:
-        with mp.Pool(processes = usable_cpu, initializer=init_custom_writer, initargs=(sorted_indx,format,mp.RLock())) as pool:
+        with mp.Pool(processes = usable_cpu, initializer=init_custom_writer, 
+                     initargs=(sorted_indx,format,seek_offset,
+                               cumsum_traj,args.stride,args.traj,mp.RLock())) as pool:
             pool.map(printout_custom, range(len(sorted_indx)))
 
     stdout(f'time needed for postprocessing step: {round(perf_counter() - start3,3)} s')
