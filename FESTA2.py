@@ -378,6 +378,7 @@ def printout_custom(i):
                         minfile.write(line)
                         if line.startswith('END'):
                             break
+                pbar.update(1)
 
 
 def printout_prework(end, trajl):
