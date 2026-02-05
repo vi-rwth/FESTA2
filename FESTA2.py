@@ -27,8 +27,8 @@ filterwarnings('ignore', category=RuntimeWarning)
 parser = ArgumentParser()
 
 # INPUT
-parser.add_argument('-traj', '--trajectory', dest='traj', required=True, nargs='+',
-                    help='!REQUIRED! MD trajectory-file name in the MD-output-directory. '\
+parser.add_argument('-traj', '--trajectory', dest='traj', nargs='+',
+                    help='MD trajectory-file name in the MD-output-directory. '\
                     'Format is also used for output-files.',
                     type=str)
     
@@ -41,7 +41,7 @@ parser.add_argument('-fes', '--fes', dest='fes', default=None,
                     help='FES-file name in the MD-output-directory. DEFAULT: None',
                     type=str)
 
-parser.add_argument('-cv', '--colvar', dest='colvar', default='COLVAR', nargs='+',
+parser.add_argument('-cv', '--colvar', dest='colvar', default='COLVAR', required=True, nargs='+',
                     help='COLVAR-file in the MD-output-directory. DEFAULT: "COLVAR".',
                     type=str)
 
@@ -380,18 +380,18 @@ def printout_custom(i):
                             break
 
 
-def printout_prework(end):
+def printout_prework(end, trajl):
     lookstr = 'BEGIN_CFG' if end == 'cfg' else 'CRYST1'
     file_offset = []
-    traj_len = np.empty(len(args.traj), dtype=np.uint64)
+    traj_len = np.empty(len(trajl), dtype=np.uint64)
     try: #UNIX
-        for i,filename in enumerate(args.traj):
+        for i,filename in enumerate(trajl):
             result = run(f"grep -b '^{lookstr}' {filename} | cut -d: -f1", shell=True, capture_output=True, text=True)
             seek_offset = np.fromstring(result.stdout, dtype=int, sep='\n')
             file_offset.append(seek_offset)
             traj_len[i] = len(seek_offset)
     except FileNotFoundError: #WINDOWS
-        for i,filename in enumerate(args.traj):
+        for i,filename in enumerate(trajl):
             seek_offset = []
             with open(filename,'rb') as f:
                 line_offset = 0
@@ -427,7 +427,6 @@ if __name__ == '__main__':
     stdout(f'working directory: {args.md_dir}', start='\n')
     os.chdir(args.md_dir)
     args.colvar = sorted(args.colvar, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
-    args.traj = sorted(args.traj, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
 
     pos_cvs_fes = (0,1)
     pos_ener = 2
@@ -444,6 +443,7 @@ if __name__ == '__main__':
             pos_ener = all_custom_pos[4]
             pos_cvs_colv = all_custom_pos[:2]
 
+    print('reading colvar file ... ' , end='', flush=True)
     a, b = [], []
     for element in args.colvar:
         try:
@@ -456,6 +456,7 @@ if __name__ == '__main__':
     
     a = np.concatenate(a)
     b = np.concatenate(b)
+    print('done')
 
     if args.stride == 0:
         args.stride = 1
@@ -503,33 +504,37 @@ if __name__ == '__main__':
     elif args.mindist < 2*np.sqrt(parameters[2]**2+parameters[3]**2):
         raise Exception('Minimal separation distance must be larger than diagonal of a single bin.')
     
-    print('reading trajectory in ... ' , end='', flush=True)
-    cp2k_pdb = False
-    try:
-        if args.topo == None:
-            if args.traj[0].split('.')[-1] == 'lammpstrj':
-                u = Universe(args.traj, topology_format='LAMMPSDUMP')
+    if not args.fes_png == 'only':
+        print('reading trajectory ... ' , end='', flush=True)
+        args.traj = sorted(args.traj, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
+        cp2k_pdb = False
+        try:
+            if args.topo == None:
+                if args.traj[0].split('.')[-1] == 'lammpstrj':
+                    u = Universe(args.traj, topology_format='LAMMPSDUMP')
+                else:
+                    u = Universe(args.traj)
             else:
-                u = Universe(args.traj)
-        else:
-            u = Universe(args.topo, args.traj, atom_style='atomic')
-        ag = u.select_atoms('all')
-        format = 'MDAnalysis'
-        if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
-            raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
-    except (IndexError, ValueError):
-        if args.traj[0].endswith('.pdb'):
-            format = 'cp2k_pdb'
-        elif args.traj[0].endswith('.cfg'):
-            format = 'cfg'
-        else:
-            raise Exception('MDAnalysis does not support this topology- or trajectory-file')
-        seek_offset, traj_len = printout_prework(format)
-        frame_count = sum(traj_len)
-        cumsum_traj = np.cumsum(traj_len)
-        if not int((frame_count-1)/args.stride+1) == len(a):
-            raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
-    print('done')
+                u = Universe(args.topo, args.traj, atom_style='atomic')
+            ag = u.select_atoms('all')
+            format = 'MDAnalysis'
+            if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
+                raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
+        except (IndexError, ValueError):
+            if args.traj[0].endswith('.pdb'):
+                format = 'cp2k_pdb'
+            elif args.traj[0].endswith('.cfg'):
+                format = 'cfg'
+            else:
+                raise Exception('MDAnalysis does not support this topology- or trajectory-file')
+            seek_offset, traj_len = printout_prework(format, args.traj)
+            frame_count = sum(traj_len)
+            cumsum_traj = np.cumsum(traj_len)
+            if not int((frame_count-1)/args.stride+1) == len(a):
+                raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
+        print('done')
+
+        all_points = hash_colv(parameters, a, b)
     
     print('executing CCL step ... ', end='', flush=True)
     start0 = perf_counter()
@@ -579,15 +584,30 @@ if __name__ == '__main__':
         print('minimum identified') if len(grouped_points) == 1 else print('minima identified')
     
     tot_min_frames = 0
-
-    all_points = hash_colv(parameters, a, b)
+    roids = np.empty((len(grouped_points),2))
     
     usable_cpu = os.cpu_count()
     sorted_indx, exteriors_x, exteriors_y = [], [], []
     tol = np.sqrt(parameters[3]**2 + parameters[2]**2)
     with mp.Pool(processes=usable_cpu, initializer=init_polygon, initargs=(single,tol), maxtasksperchild=100) as pool:
         for j in tqdm.tqdm(range(len(grouped_points)), desc='polygon distance', leave=False):
-            polygon = shapely.Polygon(grouped_points[j]).buffer(0) 
+            polygon = shapely.Polygon(grouped_points[j]).buffer(0)
+
+            try:
+                exteriors_x.append(np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
+                exteriors_y.append(parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
+            except AttributeError:
+                exteriors_x_tmp, exteriors_y_tmp = [], []
+                for poly in polygon.geoms:
+                    exteriors_x_tmp += (np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))).tolist()
+                    exteriors_y_tmp += (parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))).tolist()
+                exteriors_x.append(exteriors_x_tmp)
+                exteriors_y.append(exteriors_y_tmp)
+
+            if args.fes_png == 'only':
+                continue
+
+            roids[j] = polygon.centroid.coords[0]
             poly_wkb = shapely.wkb.dumps(polygon)
             
             pol_fill = np.array([fes_bin for fes_bin in pol_bins if polygon.distance(shapely.Point(fes_bin)) <= args.mindist])
@@ -611,30 +631,13 @@ if __name__ == '__main__':
                     if len(r_idx) > 0:
                         final_indices.extend(r_idx)
 
-            if single:      
-                distance_list = shapely.distance(polygon.centroid, shapely.points(a[final_indices], b[final_indices]))
+            if single:
+                distance_list = shapely.distance(roids[j], shapely.points(a[final_indices], b[final_indices]))
                 sorted_indx.append([final_indices[np.argmin(distance_list)]])
             else:
                 final_indices.sort()
                 sorted_indx.append(final_indices)
             tot_min_frames += len(sorted_indx[-1])
-            
-            try:
-                exteriors_x.append(np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
-                exteriors_y.append(parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
-            except AttributeError:
-                exteriors_x_tmp, exteriors_y_tmp = [], []
-                for poly in polygon.geoms:
-                    exteriors_x_tmp += (np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))).tolist()
-                    exteriors_y_tmp += (parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))).tolist()
-                exteriors_x.append(exteriors_x_tmp)
-                exteriors_y.append(exteriors_y_tmp)
-    
-    stdout(f'processed {len(a)} frames')
-    stdout(f'found {tot_min_frames} minima frames')
-    if tot_min_frames/len(a) > 0.9:
-        stdout(f'WARNING: {round(tot_min_frames/len(a)*100)}% of frames part of minima, check if this really is what you want')
-    stdout(f'time needed for minima frames identification step: {round(perf_counter() - start1,3)} s')
 
     try:
         os.mkdir('minima')
@@ -661,13 +664,18 @@ if __name__ == '__main__':
         if args.fes_png == 'only':
             stdout(termin, center=True, start='\n')
             exit()
+
+    stdout(f'processed {len(a)} frames')
+    stdout(f'found {tot_min_frames} minima frames')
+    if tot_min_frames/len(a) > 0.9:
+        stdout(f'WARNING: {round(tot_min_frames/len(a)*100)}% of frames part of minima, check if this really is what you want')
+    stdout(f'time needed for minima frames identification step: {round(perf_counter() - start1,3)} s')
     
     desc = []
     if periodicity:
         sorted_coords_period, tot_pbc  = [], []
         for elem in pbc:
-            desc.append(' + '.join((f'CV1: {round(np.mean(grouped_points[j], axis=0)[0],4)} '\
-            f'CV2: {round(np.mean(grouped_points[j], axis=0)[1],4)}') for j in elem))
+            desc.append(' + '.join((f'CV1: {round(roids[j,0],4)} CV2: {round(roids[j,1],4)}') for j in elem))
             help_list = []
             for i in elem:
                 tot_pbc.append(i)
@@ -677,8 +685,7 @@ if __name__ == '__main__':
             sorted_coords_period.append(help_list)
         for i,elem in enumerate(sorted_indx):
             if not i in tot_pbc:
-                desc.append(f'CV1: {round(np.mean(grouped_points[i], axis=0)[0],4)} '\
-                f'CV2: {round(np.mean(grouped_points[i], axis=0)[1],4)}')
+                desc.append(f'CV1: {round(roids[i,0],4)} CV2: {round(roids[i,1],4)}')
                 sorted_coords_period.append(elem)
         sorted_indx = sorted_coords_period
         print(str(len(sorted_indx)), end=' ')
@@ -690,8 +697,7 @@ if __name__ == '__main__':
             if desc:
                 overviewfile.writelines(f'min_{i} : {desc[i]} \n')
             else:
-                overviewfile.writelines(f'min_{i} : CV1: {round(np.mean(grouped_points[i], axis=0)[0],4)} '\
-                f'CV2: {round(np.mean(grouped_points[i], axis=0)[1],4)}\n')
+                overviewfile.writelines(f'min_{i} : CV1: {round(roids[i,0],4)} CV2: {round(roids[i,1],4)}\n')
     if format == 'MDAnalysis':
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='printing to file', leave=False):
             printout(i)
