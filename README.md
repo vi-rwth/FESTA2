@@ -18,8 +18,8 @@ Main differences:
 - quality of life improvements:
   - multiple trajectory- and COLVAR-files can now be concatenated (bash glob supported)
   - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
-  - Preview Mode: only generate FES-png (no trajectory files are written) -> "--png only"
-  - Representative Frame: only outputs single most representative frame of each minimum -> "--stride 0"
+  - "--png only": only generate preview of Polygons+FES (no frame separation)
+  - "--stride 0": only output the single most representative frame of each minimum
 
 This is still highly work-in-progress and subject to change at any point \
 If you are using this in your work, cite the published version above
