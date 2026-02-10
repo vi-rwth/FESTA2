@@ -6,13 +6,14 @@ import matplotlib.pyplot as plt
 import shapely.wkb
 import shapely
 
+from scipy.ndimage import binary_erosion
 from argparse import ArgumentParser
 from subprocess import run
 from time import perf_counter
 from copy import deepcopy
 from operator import countOf
 from warnings import filterwarnings
-from shutil import rmtree
+from shutil import rmtree, copyfileobj
 from itertools import count
 from matplotlib import ticker
 from MDAnalysis import Universe
@@ -92,10 +93,9 @@ def init_polygon(_singl,_tol):
     single,tol = _singl,_tol
 
 
-def init_custom_writer(_sorted_indx,_fmt,_skoff,_cstraj,_str,_traj,barargs):
-    tqdm.tqdm.set_lock(barargs)
-    global sorted_indx, format, seek_offset, cumsum_traj, trajl, stride
-    sorted_indx, format, seek_offset, cumsum_traj, trajl, stride = _sorted_indx, _fmt, _skoff, _cstraj, _traj, _str
+def init_custom_writer(_fmt,_skoff,_cstraj,_traj):
+    global format, seek_offset, cumsum_traj, trajl
+    format, seek_offset, cumsum_traj, trajl = _fmt, _skoff, _cstraj, _traj
 
 
 def have_common_elem(l1, l2):
@@ -134,9 +134,10 @@ def pos_polygon(parameters, pts):
 
 
 def fes_gen_histo(a,b):
+    print('generating histogram ... ', end='', flush=True)
     dimX, dimY = int(args.dims.split(',')[0]), int(args.dims.split(',')[1])
 
-    histo, xedges, yedges = np.histogram2d(a, b, bins=(dimY,dimX), range=((min(a),max(a)),(min(b),max(b))), density=True)
+    histo, xedges, yedges = np.histogram2d(a, b, bins=(dimX,dimY), range=((min(a),max(a)),(min(b),max(b))), density=True)
     xcenters = (xedges[:-1]+xedges[1:])/2
     ycenters = (yedges[:-1]+yedges[1:])/2
     tolX = abs(xcenters[0]-xcenters[1])/2
@@ -150,6 +151,7 @@ def fes_gen_histo(a,b):
 
     histo[histo == 0] = np.nan
     ener2d = np.flipud(-np.log(histo.T))
+    print('done')
     return (dimX, dimY, tolX, tolY, min_a, min_b, max_a, max_b, fullX, fullY), ener2d, coords
 
 
@@ -362,23 +364,31 @@ def printout(i):
         ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[curr_indx])
 
 
-def printout_custom(i):
-    curr_indx = [stride*q for q in sorted_indx[i]] if stride > 1 else sorted_indx[i]
-    end = 'cfg' if format == 'cfg' else 'pdb'
-    with open(f'minima/min_{i}.'+end, 'w') as minfile:
-        with tqdm.tqdm(total=len(curr_indx), desc=f'writing min {i}', 
-                position=tqdm.tqdm._get_free_pos()+i, leave=False) as pbar:
-            for idx in curr_indx:
-                file_index = np.searchsorted(cumsum_traj, idx, side='right')
-                file_seek_idx = idx-cumsum_traj[file_index-1] if file_index > 0 else idx
-                with open(trajl[file_index], 'rb') as ftraj:
-                    ftraj.seek(seek_offset[file_index][file_seek_idx])
-                    for line_bytes in ftraj:
-                        line = line_bytes.decode('utf-8')
-                        minfile.write(line)
-                        if line.startswith('END'):
-                            break
-                pbar.update(1)
+def printout_custom(data):
+    workeridx,curr_indx = data
+    current_file_idx = -1
+    ftraj = None
+    currfile = f'minima/temp_{workeridx}.'+format
+    try:
+        with open(currfile, 'wb') as minfile:
+            file_indices = np.searchsorted(cumsum_traj, curr_indx, side='right')
+            for j,idx in enumerate(curr_indx):
+                file_seek_idx = idx-cumsum_traj[file_indices[j]-1] if file_indices[j] > 0 else idx
+                if not file_indices[j] == current_file_idx:
+                    if ftraj:
+                        ftraj.close()
+                    ftraj = open(trajl[file_indices[j]], 'rb')
+                    current_file_idx = file_indices[j]
+
+                ftraj.seek(seek_offset[file_indices[j]][file_seek_idx])
+                for line_bytes in ftraj:
+                    minfile.write(line_bytes)
+                    if line_bytes.startswith(b'END'):
+                        break
+    finally:
+        if ftraj:
+            ftraj.close()
+    return currfile
 
 
 def printout_prework(end, trajl):
@@ -459,17 +469,16 @@ if __name__ == '__main__':
     b = np.concatenate(b)
     print('done')
 
-    if args.stride == 0:
+    single = False
+    if args.stride > 1:
+        a, b = a[::args.stride], b[::args.stride]
+        print(f'applied {args.stride} stride')
+    elif args.stride == 0:
         args.stride = 1
         single = True
-    else:
-        single = False
-    
+
     parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b)
 
-    if args.stride > 1:
-        a, b = a[0::args.stride], b[0::args.stride]
-    
     if args.thresh == None:
         if not args.fes == None:
             max_ener = np.max(ener2d)
@@ -478,33 +487,32 @@ if __name__ == '__main__':
         else:
             raise Exception('Cannot use automatic threshold detection with histogram mode')
     stdout(f'threshold value: {round(args.thresh,3)} a.U.')
-    
-    outline, outl_vis, edge, bins = [], [], [], []
-    
-    tot_bin = 0
-    pol_bins = []
-    for i in range(parameters[0]):
-        for j in range(parameters[1]):
-            tot_bin += 1
-            try:
-                if ener2d[i,j] < args.thresh:
-                    pol_bins.append([coords[i,j,0],coords[i,j,1]])
-                    if (coords[i,j,0] == parameters[4] or coords[i,j,0] == parameters[6] or coords[i,j,1] == parameters[5]
-                                              or coords[i,j,1] == parameters[7] or ener2d[i-1,j]>args.thresh or ener2d[i+1,j]>args.thresh 
-                                              or ener2d[i,j-1]>args.thresh or ener2d[i,j+1]>args.thresh or ener2d[i+1,j+1]>args.thresh 
-                                              or ener2d[i-1,j+1]>args.thresh or ener2d[i+1,j-1]>args.thresh or ener2d[i-1,j-1]>args.thresh):
-                        if coords[i,j,0] == parameters[4] or coords[i,j,0] == parameters[6] or coords[i,j,1] == parameters[5] or coords[i,j,1] == parameters[7]:
-                            edge.append(coords[i,j,:])
-                        outline.append(coords[i,j,:])
-                        bins.append(tot_bin)
-            except IndexError:
-                pass
+
+    mask_valid = ener2d < args.thresh  
+    rows, cols = parameters[1], parameters[0]
+    mask_grid_edge = np.zeros_like(mask_valid, dtype=bool)
+    mask_grid_edge[0, :] = True
+    mask_grid_edge[-1, :] = True
+    mask_grid_edge[:, 0] = True
+    mask_grid_edge[:, -1] = True
+
+    mask_eroded = binary_erosion(mask_valid, structure=np.ones((3,3)), border_value=0)
+    mask_outline = mask_valid & (~mask_eroded)
+    pol_bins = coords[mask_valid] 
+
+    outline = coords[mask_outline]
+    edge = coords[mask_valid & mask_grid_edge]
+
+    flat_indices = np.arange(1, rows*cols+1).reshape(rows, cols)
+    bins = flat_indices[mask_outline]
     
     if args.mindist == None:
         args.mindist = np.sqrt((parameters[6]-parameters[4])**2+(parameters[7]-parameters[5])**2)*0.02
     elif args.mindist < 2*np.sqrt(parameters[2]**2+parameters[3]**2):
-        raise Exception('Minimal separation distance must be larger than diagonal of a single bin.')
-    
+        raise Exception('Minimal separation distance must be larger than '\
+                        f'diagonal of a single bin:{2*np.sqrt(parameters[2]**2+parameters[3]**2)} a.U.')
+    print(f'separation distance: {round(args.mindist,5)} a.U.')
+
     if not args.fes_png == 'only':
         print('reading trajectory ... ' , end='', flush=True)
         args.traj = sorted(args.traj, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
@@ -523,7 +531,7 @@ if __name__ == '__main__':
                 raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
         except (IndexError, ValueError):
             if args.traj[0].endswith('.pdb'):
-                format = 'cp2k_pdb'
+                format = 'pdb'
             elif args.traj[0].endswith('.cfg'):
                 format = 'cfg'
             else:
@@ -548,7 +556,7 @@ if __name__ == '__main__':
     
     start1 = perf_counter()
     periodicity = False
-    if edge and args.pbc == 'True':
+    if edge.size > 0 and args.pbc == 'True':
         edge_points, pbc = [], []
         grouped_edges = ex3(edge, 10*2*np.sqrt(parameters[2]**2+parameters[3]**2))
         for i in range(len(grouped_edges)):
@@ -633,7 +641,7 @@ if __name__ == '__main__':
                         final_indices.extend(r_idx)
 
             if single:
-                distance_list = shapely.distance(roids[j], shapely.points(a[final_indices], b[final_indices]))
+                distance_list = shapely.distance(polygon.centroid, shapely.points(a[final_indices], b[final_indices]))
                 sorted_indx.append([final_indices[np.argmin(distance_list)]])
             else:
                 final_indices.sort()
@@ -703,10 +711,17 @@ if __name__ == '__main__':
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='printing to file', leave=False):
             printout(i)
     else:
-        with mp.Pool(processes = usable_cpu, initializer=init_custom_writer, 
-                     initargs=(sorted_indx,format,seek_offset,
-                               cumsum_traj,args.stride,args.traj,mp.RLock())) as pool:
-            pool.map(printout_custom, range(len(sorted_indx)))
+        if single:
+            usable_cpu = 1
+        with mp.Pool(processes=usable_cpu, initializer=init_custom_writer, 
+                    initargs=(format,seek_offset,cumsum_traj,args.traj)) as pool:
+            for i in tqdm.tqdm(range(len(sorted_indx))):
+                indxsplit = np.array_split(sorted_indx[i]*args.stride, usable_cpu)
+                with open(f'minima/min_{i}.'+format, 'wb') as outfile:
+                    for filename in pool.imap_unordered(printout_custom, enumerate(indxsplit)):
+                        with open(filename, 'rb') as infile:
+                            copyfileobj(infile, outfile)
+                        os.remove(filename)
 
     stdout(f'time needed for postprocessing step: {round(perf_counter() - start3,3)} s')
     stdout(termin, center=True, start='\n')
