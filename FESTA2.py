@@ -491,10 +491,10 @@ if __name__ == '__main__':
     mask_valid = ener2d < args.thresh  
     rows, cols = parameters[1], parameters[0]
     mask_grid_edge = np.zeros_like(mask_valid, dtype=bool)
-    mask_grid_edge[0, :] = True
-    mask_grid_edge[-1, :] = True
-    mask_grid_edge[:, 0] = True
-    mask_grid_edge[:, -1] = True
+    mask_grid_edge[0,:] = True
+    mask_grid_edge[-1,:] = True
+    mask_grid_edge[:,0] = True
+    mask_grid_edge[:,-1] = True
 
     mask_eroded = binary_erosion(mask_valid, structure=np.ones((3,3)), border_value=0)
     mask_outline = mask_valid & (~mask_eroded)
@@ -528,7 +528,8 @@ if __name__ == '__main__':
             ag = u.select_atoms('all')
             format = 'MDAnalysis'
             if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
-                raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
+                raise Exception('COLVAR-file and trajectory-file must have similar step length,'/
+                                f' here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
         except (IndexError, ValueError):
             if args.traj[0].endswith('.pdb'):
                 format = 'pdb'
@@ -540,7 +541,8 @@ if __name__ == '__main__':
             frame_count = sum(traj_len)
             cumsum_traj = np.cumsum(traj_len)
             if not int((frame_count-1)/args.stride+1) == len(a):
-                raise Exception(f'COLVAR-file and trajectory-file must have similar step length, here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
+                raise Exception('COLVAR-file and trajectory-file must have similar step length,'/
+                                f' here: {len(a)} vs {int((frame_count-1)/args.stride+1)}')
         print('done')
 
         all_points = hash_colv(parameters, a, b)
@@ -715,7 +717,7 @@ if __name__ == '__main__':
             usable_cpu = 1
         with mp.Pool(processes=usable_cpu, initializer=init_custom_writer, 
                     initargs=(format,seek_offset,cumsum_traj,args.traj)) as pool:
-            for i in tqdm.tqdm(range(len(sorted_indx))):
+            for i in tqdm.tqdm(range(len(sorted_indx)), desc='writing frames', leave=False):
                 indxsplit = np.array_split(sorted_indx[i]*args.stride, usable_cpu)
                 with open(f'minima/min_{i}.'+format, 'wb') as outfile:
                     for filename in pool.imap_unordered(printout_custom, enumerate(indxsplit)):
