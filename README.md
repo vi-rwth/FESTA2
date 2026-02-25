@@ -18,7 +18,7 @@ Main differences:
   - frame extraction/printing for CustomWriter in chunks using all cores
   - various other minor performance improvements
 - quality of life improvements:
-  - multiple trajectory- and COLVAR-files can now be concatenated (bash glob supported)
+  - multiple trajectory- and COLVAR-files (same format) are now accepted (bash glob supported)
   - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
   - "--png only": only generate preview of Polygons+FES (no frame separation)
   - "--stride 0": only output the single most representative frame of each minimum
