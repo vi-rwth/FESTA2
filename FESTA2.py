@@ -77,8 +77,7 @@ parser.add_argument('-png', '--png', dest='fes_png', default='True', choices=('T
                     type=str)
     
 parser.add_argument('-dim', '--dim', dest='dims', default='500,500',
-                    help='x-dimension,y-dimension of generated FES '\
-                    'if no FES-file provided. DEFAULT: 500,500',
+                    help='x-dimension,y-dimension of generated FES if no FES-file provided. DEFAULT: 500,500',
                     type=str)
 
 parser.add_argument('-md', '--md', dest='md_dir', default=os.getcwd(),
@@ -353,15 +352,6 @@ def ex3(hash_tab, new_grid_dimX, max_diff):
         if not i in tot:
             fin_sep_groups.append(elem)
     return fin_sep_groups
-    
-
-def printout(i):
-    curr_indx = [args.stride*q for q in sorted_indx[i]] if args.stride > 1 else sorted_indx[i]
-    try:
-        ag.write(f'minima/min_{i}.{args.traj[0].split(".")[-1]}', frames=u.trajectory[curr_indx])
-    except (TypeError, ValueError):
-        #print(f'MDAnalysis does not support writing in {args.traj.split(".")[-1]}-format, writing in pdb-format instead')
-        ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[curr_indx])
 
 
 def printout_custom(data):
@@ -431,7 +421,7 @@ if __name__ == '__main__':
     start = perf_counter()
     title = '.: Free Energy Surface Trajectory Analysis - FESTA :.'
     termin = '.: terminated successfully :.'
-    version = '.: histogram-capable version :.'
+    version = '.: standalone version :.'
 
     stdout(title, center=True, start='\n')
     stdout(version, center=True)
@@ -458,7 +448,7 @@ if __name__ == '__main__':
     a, b = [], []
     for element in args.colvar:
         try:
-            a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float, delimiter=';')
+            a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float)
         except UnicodeDecodeError:
             tmp = np.load(element)
             a_tmp, b_tmp = tmp[:,0],tmp[:,1]
@@ -520,9 +510,9 @@ if __name__ == '__main__':
         try:
             if args.topo == None:
                 if args.traj[0].split('.')[-1] == 'lammpstrj':
-                    u = Universe(args.traj, topology_format='LAMMPSDUMP')
+                    u = Universe(args.traj[0], args.traj, topology_format='LAMMPSDUMP', format='LAMMPSDUMP')
                 else:
-                    u = Universe(args.traj)
+                    u = Universe(args.traj[0], args.traj)
             else:
                 u = Universe(args.topo, args.traj, atom_style='atomic')
             ag = u.select_atoms('all')
@@ -627,7 +617,7 @@ if __name__ == '__main__':
             for key in pol_fill_keys:
                 candidate_indices.extend(all_points.get(key, []))
             
-            candidate_indices = np.array(candidate_indices, dtype=np.uint64)
+            candidate_indices = np.array(candidate_indices, dtype=np.int64)
             num_chunks = int(np.ceil(len(candidate_indices)/50000))
             num_chunks = max(num_chunks, usable_cpu*4)
 
@@ -667,7 +657,7 @@ if __name__ == '__main__':
         plt.title(f'threshold: {round(args.thresh,3)} a.U.')
         for i in range(len(exteriors_x)):
             plt.plot(exteriors_x[i], exteriors_y[i], '-', color='white', lw=0.5)
-        cb = plt.colorbar(label='free energy [a.U.]', format="{x:.0f}")
+        cb = plt.colorbar(label='free energy [a.U.]', format="{x:.1f}")
         tick_locator = ticker.MaxNLocator(nbins=8)
         cb.locator = tick_locator
         cb.update_ticks()    
@@ -710,8 +700,16 @@ if __name__ == '__main__':
             else:
                 overviewfile.writelines(f'min_{i} : CV1: {round(roids[i,0],4)} CV2: {round(roids[i,1],4)}\n')
     if format == 'MDAnalysis':
-        for i in tqdm.tqdm(range(len(sorted_indx)), desc='printing to file', leave=False):
-            printout(i)
+        for i in tqdm.tqdm(range(len(sorted_indx)), desc='writing frames', leave=False):
+            curr_indx = sorted_indx[i]*args.stride
+            try:
+                ag.write(f'minima/min_{i}.{args.traj[0].split(".")[-1]}', frames=u.trajectory[curr_indx])
+                writer_avail = True
+            except (TypeError, ValueError):
+                writer_avail = False
+                ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[curr_indx])
+        if not writer_avail:
+            print(f'MDAnalysis does not support writing in {args.traj[0].split(".")[-1]}-format, frames are in xyz-format instead')
     else:
         if single:
             usable_cpu = 1
