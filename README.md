@@ -4,7 +4,9 @@ To the publication: https://pubs.acs.org/doi/full/10.1021/acs.jcim.4c01022
 Main differences:
 - no PLUMED dependency anymore:
   - if no FES-file provided: histogram creation from COLVAR-file
-  - columns read can be set manually for COLVAR- and FES-files
+  - "--column": sets the column index (starting at 1) for COLVAR, FES or both. 
+  - CAUTION: This means that COLVAR is not expected to have any headers!
+  - CAUTION: Usually PLUMED prints the timestep in the first column in COLVAR, adjust --column accordingly!
 - new formats supported:
   - binary NPY-format for COLVAR-files (shape(N_frames, 2))
   - MLIPs CFG-format for trajectories (https://doi.org/10.1063/5.0155887) read+write
