@@ -589,8 +589,8 @@ if __name__ == '__main__':
         print('minimum identified') if len(grouped_points) == 1 else print('minima identified')
     
     tot_min_frames = 0
-    roids = np.empty((len(grouped_points),2))
-    
+    roids = []
+        
     usable_cpu = os.cpu_count()
     sorted_indx, exteriors_x, exteriors_y = [], [], []
     tol = np.sqrt(parameters[3]**2 + parameters[2]**2)
@@ -628,7 +628,7 @@ if __name__ == '__main__':
             if args.fes_png == 'only':
                 continue
 
-            roids[j] = polygon.centroid.coords[0]
+            roids.append(polygon.centroid.coords[0])
             poly_wkb = shapely.wkb.dumps(polygon)
             
             pol_fill_keys = pos_polygon(parameters, pol_fill)
@@ -658,7 +658,8 @@ if __name__ == '__main__':
                 final_indices.sort()
                 sorted_indx.append(final_indices)
             tot_min_frames += len(sorted_indx[-1])
-
+            
+    roids = np.array(roids)
     if args.thresh_low:
         skipped_poly = len(grouped_points)-len(exteriors_x)
         print(f'omitted {skipped_poly} area(s) due to energies lower than {args.thresh_low} a.U.')
