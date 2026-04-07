@@ -30,59 +30,54 @@ parser = ArgumentParser()
 # INPUT
 parser.add_argument('-traj', '--trajectory', dest='traj', nargs='+',
                     help='MD trajectory-file name in the MD-output-directory. '\
-                    'Format is also used for output-files.',
-                    type=str)
+                    'Format is also used for output-files.', type=str)
     
 parser.add_argument('-topo', '--topology', dest='topo', default=None,
                     help='MD topology-file name in the MD-output-directory, '\
-                    'if trajectory-file does not specify topology. DEFAULT: None.',
-                    type=str)
+                    'if trajectory-file does not specify topology. DEFAULT: None.', type=str)
     
 parser.add_argument('-fes', '--fes', dest='fes', default=None,
-                    help='FES-file name in the MD-output-directory. DEFAULT: None',
-                    type=str)
+                    help='FES-file name in the MD-output-directory. DEFAULT: None', type=str)
 
 parser.add_argument('-cv', '--colvar', dest='colvar', default='COLVAR', required=True, nargs='+',
-                    help='COLVAR-file in the MD-output-directory. DEFAULT: "COLVAR".',
-                    type=str)
+                    help='COLVAR-file in the MD-output-directory. DEFAULT: "COLVAR".', type=str)
 
 parser.add_argument('-col, --column', dest='column', default=None,
                     help='Columns for CV1;CV2 (colvar) or CV1;CV2;Energy (fes). Expects 2 integers '\
                         '(custom colvar columns), 3 integers (custom fes columns) or 5 integers (custom colvar and fes) '\
-                            'delimited by commas. DEFAULT: "1,2 and 1,2,3"')
+                            'delimited by commas. First column is denoted 1. DEFAULT: "1,2 and 1,2,3"')
 
 # TUNING
-parser.add_argument('-thresh', '--thresh', dest='thresh', default=None,
+parser.add_argument('-thr', '--thresh', dest='thresh', default=None,
                     help='Specifies threshold for assigning. Input value has to correspond with values in FES-file. '\
-                    'DEFAULT: Lowest 1/12 of the energy span.',
-                    type=float)
+                    'DEFAULT: Lowest 1/12 of the energy span.', type=float)
     
-parser.add_argument('-pbc', '--pbc', dest='pbc', default='False', choices=('True','False'),
-                    help='Specifies whether the FES is periodic. Expects True/False. DEFAULT: False.',
-                    type=str)
+parser.add_argument('-pbc', '--pbc', dest='pbc', action='store_true',
+                    help='Use this flag when the FES is periodic.')
     
-parser.add_argument('-mindist', '--mindist', dest='mindist', default=None,
+parser.add_argument('-mind', '--mindist', dest='mindist', default=None,
                     help='Smallest allowed distance at which areas are considered separate minima (in CV units). '\
-                    'DEFAULT: 2%% of FES diagonal.',
-                    type=float)
+                    'DEFAULT: 2%% of FES diagonal.', type=float)
+
+parser.add_argument('-thr_l','--thresh_low', dest='thresh_low', default=None, 
+                    help='Omit minima with with energies lower than this value. Useful when analyzing '\
+                        'highly metastable or transition states.', type=float)
 
 # OPTIONAL
-parser.add_argument('-stride', '--stride', dest='stride', default=1,
+parser.add_argument('-str', '--stride', dest='stride', default=1,
                     help='Reads only every n-th frame of trajectory. If 0 then only outputs a single frame per '\
                         'minimum. DEFAULT: 1.', type=int)
 
 parser.add_argument('-png', '--png', dest='fes_png', default='True', choices=('True','False','only'),
                     help='Specifies whether a PNG-visualization of the FES should be created (True/False) '\
-                    'or if only a PNG is desired (only). DEFAULT: True.',
-                    type=str)
+                    'or if only a PNG is desired (only). DEFAULT: True.', type=str)
     
 parser.add_argument('-dim', '--dim', dest='dims', default='500,500',
                     help='x-dimension,y-dimension of generated FES if no FES-file provided. DEFAULT: 500,500',
                     type=str)
 
 parser.add_argument('-md', '--md', dest='md_dir', default=os.getcwd(),
-                    help='Working path. DEFAULT: Current directory path.',
-                    type=str)
+                    help='Working path. DEFAULT: Current directory path.', type=str)
 
 args = parser.parse_args()
 
@@ -102,6 +97,16 @@ def have_common_elem(l1, l2):
         if countOf(l1, elem) > 0:
             return True
     return False
+
+
+def format2lookstr(format):
+    if format == 'cfg':
+        lookstr = 'BEGIN_CFG'
+    elif format == 'lammpstrj':
+        lookstr = 'ITEM: TIMESTEP'
+    elif format == 'pdb':
+        lookstr = 'CRYST1'
+    return lookstr
     
 
 def process_chunk(task_data):
@@ -133,6 +138,7 @@ def pos_polygon(parameters, pts):
 
 
 def fes_gen_histo(a,b):
+    start_temp = perf_counter()
     print('generating histogram ... ', end='', flush=True)
     dimX, dimY = int(args.dims.split(',')[0]), int(args.dims.split(',')[1])
 
@@ -150,7 +156,7 @@ def fes_gen_histo(a,b):
 
     histo[histo == 0] = np.nan
     ener2d = np.flipud(-np.log(histo.T))
-    print('done')
+    print(f'done in {round(perf_counter() - start_temp,2)} s')
     return (dimX, dimY, tolX, tolY, min_a, min_b, max_a, max_b, fullX, fullY), ener2d, coords
 
 
@@ -359,6 +365,7 @@ def printout_custom(data):
     current_file_idx = -1
     ftraj = None
     currfile = f'minima/temp_{workeridx}.'+format
+    lookstr = format2lookstr(format).encode()
     try:
         with open(currfile, 'wb') as minfile:
             file_indices = np.searchsorted(cumsum_traj, curr_indx, side='right')
@@ -371,10 +378,12 @@ def printout_custom(data):
                     current_file_idx = file_indices[j]
 
                 ftraj.seek(seek_offset[file_indices[j]][file_seek_idx])
+                first_line = ftraj.readline()
+                minfile.write(first_line)
                 for line_bytes in ftraj:
-                    minfile.write(line_bytes)
-                    if line_bytes.startswith(b'END'):
+                    if line_bytes.startswith(lookstr):
                         break
+                    minfile.write(line_bytes)
     finally:
         if ftraj:
             ftraj.close()
@@ -382,7 +391,7 @@ def printout_custom(data):
 
 
 def printout_prework(end, trajl):
-    lookstr = 'BEGIN_CFG' if end == 'cfg' else 'CRYST1'
+    lookstr = format2lookstr(end)
     file_offset = []
     traj_len = np.empty(len(trajl), dtype=np.uint64)
     try: #UNIX
@@ -392,6 +401,7 @@ def printout_prework(end, trajl):
             file_offset.append(seek_offset)
             traj_len[i] = len(seek_offset)
     except FileNotFoundError: #WINDOWS
+        lookstr = lookstr.encode()
         for i,filename in enumerate(trajl):
             seek_offset = []
             with open(filename,'rb') as f:
@@ -444,6 +454,7 @@ if __name__ == '__main__':
             pos_ener = all_custom_pos[4]
             pos_cvs_colv = all_custom_pos[:2]
 
+    start2 = perf_counter()
     print('reading colvar file ... ' , end='', flush=True)
     a, b = [], []
     for element in args.colvar:
@@ -457,7 +468,7 @@ if __name__ == '__main__':
     
     a = np.concatenate(a)
     b = np.concatenate(b)
-    print('done')
+    print(f'done in {round(perf_counter() - start2,2)} s')
 
     single = False
     if args.stride > 1:
@@ -488,7 +499,8 @@ if __name__ == '__main__':
 
     mask_eroded = binary_erosion(mask_valid, structure=np.ones((3,3)), border_value=0)
     mask_outline = mask_valid & (~mask_eroded)
-    pol_bins = coords[mask_valid] 
+    pol_bins = coords[mask_valid]
+    ener_bins = ener2d[mask_valid]
 
     outline = coords[mask_outline]
     edge = coords[mask_valid & mask_grid_edge]
@@ -504,29 +516,22 @@ if __name__ == '__main__':
     print(f'separation distance: {round(args.mindist,5)} a.U.')
 
     if not args.fes_png == 'only':
+        format = args.traj[0].split('.')[-1]
         print('reading trajectory ... ' , end='', flush=True)
         args.traj = sorted(args.traj, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
-        cp2k_pdb = False
         try:
             if args.topo == None:
-                if args.traj[0].split('.')[-1] == 'lammpstrj':
-                    u = Universe(args.traj[0], args.traj, topology_format='LAMMPSDUMP', format='LAMMPSDUMP')
-                else:
-                    u = Universe(args.traj[0], args.traj)
+                u = Universe(args.traj[0], args.traj)
             else:
                 u = Universe(args.topo, args.traj, atom_style='atomic')
             ag = u.select_atoms('all')
-            format = 'MDAnalysis'
+            MDAnalysis = True
             if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
                 raise Exception('COLVAR-file and trajectory-file must have similar step length,'/
                                 f' here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
         except (IndexError, ValueError):
-            if args.traj[0].endswith('.pdb'):
-                format = 'pdb'
-            elif args.traj[0].endswith('.cfg'):
-                format = 'cfg'
-            else:
-                raise Exception('MDAnalysis does not support this topology- or trajectory-file')
+            MDAnalysis = False
+            assert format in ('cfg','lammpstrj','pdb'), 'Format not supported by MDAnalysis or CustomWriter'
             seek_offset, traj_len = printout_prework(format, args.traj)
             frame_count = sum(traj_len)
             cumsum_traj = np.cumsum(traj_len)
@@ -543,12 +548,11 @@ if __name__ == '__main__':
 
     grouped_points = ex3(hash_list, new_dimX, args.mindist)
     grouped_points = [groups for groups in grouped_points if len(groups)>3]
-    print('done')
-    stdout(f'time needed for CCL step: {round(perf_counter() - start0,3)} s')
+    print(f'done in {round(perf_counter() - start0,2)} s')
     
     start1 = perf_counter()
     periodicity = False
-    if edge.size > 0 and args.pbc == 'True':
+    if edge.size > 0 and args.pbc:
         edge_points, pbc = [], []
         grouped_edges = ex3(edge, 10*2*np.sqrt(parameters[2]**2+parameters[3]**2))
         for i in range(len(grouped_edges)):
@@ -579,7 +583,7 @@ if __name__ == '__main__':
                     stdout('periodicity detected: boundaries will be considered periodic')
                 pbc.append(tmp_lst)
     print(str(len(grouped_points)), end = ' ')
-    if periodicity:
+    if periodicity or args.thresh_low:
         print('distinctive areas identified')
     else:
         print('minimum identified') if len(grouped_points) == 1 else print('minima identified')
@@ -593,15 +597,31 @@ if __name__ == '__main__':
     with mp.Pool(processes=usable_cpu, initializer=init_polygon, initargs=(single,tol), maxtasksperchild=100) as pool:
         for j in tqdm.tqdm(range(len(grouped_points)), desc='polygon distance', leave=False):
             polygon = shapely.Polygon(grouped_points[j]).buffer(0)
+            pol_fill = []
+            skip_polygon = False
+            for k,fes_bin in enumerate(pol_bins):
+                if polygon.distance(shapely.Point(fes_bin)) <= args.mindist:
+                    if args.thresh_low is None or args.thresh_low < ener_bins[k]:
+                        pol_fill.append(fes_bin)
+                    else:
+                        skip_polygon = True
+                        break
+            if skip_polygon:
+                continue
+            pol_fill = np.array(pol_fill)
 
             try:
-                exteriors_x.append(np.abs((polygon.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0])))
-                exteriors_y.append(parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1])))
+                exteriors_x.append(np.abs((polygon.exterior.xy[0]-parameters[4])/
+                                          ((parameters[6]-parameters[4])/parameters[0])))
+                exteriors_y.append(parameters[1]-np.abs((polygon.exterior.xy[1]-parameters[5])/
+                                                        ((parameters[7]-parameters[5])/parameters[1])))
             except AttributeError:
                 exteriors_x_tmp, exteriors_y_tmp = [], []
                 for poly in polygon.geoms:
-                    exteriors_x_tmp += (np.abs((poly.exterior.xy[0]-parameters[4])/((parameters[6]-parameters[4])/parameters[0]))).tolist()
-                    exteriors_y_tmp += (parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/((parameters[7]-parameters[5])/parameters[1]))).tolist()
+                    exteriors_x_tmp += (np.abs((poly.exterior.xy[0]-parameters[4])/
+                                               ((parameters[6]-parameters[4])/parameters[0]))).tolist()
+                    exteriors_y_tmp += (parameters[1]-np.abs((poly.exterior.xy[1]-parameters[5])/
+                                                             ((parameters[7]-parameters[5])/parameters[1]))).tolist()
                 exteriors_x.append(exteriors_x_tmp)
                 exteriors_y.append(exteriors_y_tmp)
 
@@ -611,7 +631,6 @@ if __name__ == '__main__':
             roids[j] = polygon.centroid.coords[0]
             poly_wkb = shapely.wkb.dumps(polygon)
             
-            pol_fill = np.array([fes_bin for fes_bin in pol_bins if polygon.distance(shapely.Point(fes_bin)) <= args.mindist])
             pol_fill_keys = pos_polygon(parameters, pol_fill)
             candidate_indices = []
             for key in pol_fill_keys:
@@ -639,6 +658,11 @@ if __name__ == '__main__':
                 final_indices.sort()
                 sorted_indx.append(final_indices)
             tot_min_frames += len(sorted_indx[-1])
+
+    if args.thresh_low:
+        skipped_poly = len(grouped_points)-len(exteriors_x)
+        print(f'omitted {skipped_poly} area(s) due to energies lower than {args.thresh_low} a.U.')
+        print(f'{len(exteriors_x)} minima identified')
 
     try:
         os.mkdir('minima')
@@ -681,7 +705,7 @@ if __name__ == '__main__':
             for i in elem:
                 tot_pbc.append(i)
                 help_list += sorted_indx[i]
-            if cp2k_pdb == True:
+            if not format == 'MDAnalysis':
                 help_list.sort()
             sorted_coords_period.append(help_list)
         for i,elem in enumerate(sorted_indx):
@@ -699,29 +723,31 @@ if __name__ == '__main__':
                 overviewfile.writelines(f'min_{i} : {desc[i]} \n')
             else:
                 overviewfile.writelines(f'min_{i} : CV1: {round(roids[i,0],4)} CV2: {round(roids[i,1],4)}\n')
-    if format == 'MDAnalysis':
+    if MDAnalysis:
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='writing frames', leave=False):
             curr_indx = sorted_indx[i]*args.stride
             try:
-                ag.write(f'minima/min_{i}.{args.traj[0].split(".")[-1]}', frames=u.trajectory[curr_indx])
+                ag.write(f'minima/min_{i}.{format}', frames=u.trajectory[curr_indx])
                 writer_avail = True
             except (TypeError, ValueError):
                 writer_avail = False
                 ag.write(f'minima/min_{i}.xyz', frames=u.trajectory[curr_indx])
         if not writer_avail:
-            print(f'MDAnalysis does not support writing in {args.traj[0].split(".")[-1]}-format, frames are in xyz-format instead')
+            print(f'MDAnalysis does not support writing in {format}-format, frames are in xyz-format instead')
     else:
         if single:
             usable_cpu = 1
         with mp.Pool(processes=usable_cpu, initializer=init_custom_writer, 
                     initargs=(format,seek_offset,cumsum_traj,args.traj)) as pool:
-            for i in tqdm.tqdm(range(len(sorted_indx)), desc='writing frames', leave=False):
-                indxsplit = np.array_split(sorted_indx[i]*args.stride, usable_cpu)
-                with open(f'minima/min_{i}.'+format, 'wb') as outfile:
-                    for filename in pool.imap_unordered(printout_custom, enumerate(indxsplit)):
-                        with open(filename, 'rb') as infile:
-                            copyfileobj(infile, outfile)
-                        os.remove(filename)
+            with tqdm.tqdm(total=len(sorted_indx)*usable_cpu, desc='writing frames', leave=False) as pbar:
+                for i in range(len(sorted_indx)):
+                    indxsplit = np.array_split(sorted_indx[i]*args.stride, usable_cpu)
+                    with open(f'minima/min_{i}.'+format, 'wb') as outfile:
+                        for filename in pool.imap_unordered(printout_custom, enumerate(indxsplit)):
+                            pbar.update(1)
+                            with open(filename, 'rb') as infile:
+                                copyfileobj(infile, outfile)
+                            os.remove(filename)
 
     stdout(f'time needed for postprocessing step: {round(perf_counter() - start3,3)} s')
     stdout(termin, center=True, start='\n')
