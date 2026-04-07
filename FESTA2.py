@@ -525,12 +525,12 @@ if __name__ == '__main__':
             else:
                 u = Universe(args.topo, args.traj, atom_style='atomic')
             ag = u.select_atoms('all')
-            MDAnalysis = True
+            use_MDAnalysis = True
             if not int((len(u.trajectory)-1)/args.stride+1) == len(a):
                 raise Exception('COLVAR-file and trajectory-file must have similar step length,'/
                                 f' here: {len(a)} vs {int((len(u.trajectory)-1)/args.stride+1)}')
         except (IndexError, ValueError):
-            MDAnalysis = False
+            use_MDAnalysis = False
             assert format in ('cfg','lammpstrj','pdb'), 'Format not supported by MDAnalysis or CustomWriter'
             seek_offset, traj_len = printout_prework(format, args.traj)
             frame_count = sum(traj_len)
@@ -705,7 +705,7 @@ if __name__ == '__main__':
             for i in elem:
                 tot_pbc.append(i)
                 help_list += sorted_indx[i]
-            if not format == 'MDAnalysis':
+            if not use_MDAnalysis:
                 help_list.sort()
             sorted_coords_period.append(help_list)
         for i,elem in enumerate(sorted_indx):
@@ -723,7 +723,7 @@ if __name__ == '__main__':
                 overviewfile.writelines(f'min_{i} : {desc[i]} \n')
             else:
                 overviewfile.writelines(f'min_{i} : CV1: {round(roids[i,0],4)} CV2: {round(roids[i,1],4)}\n')
-    if MDAnalysis:
+    if use_MDAnalysis:
         for i in tqdm.tqdm(range(len(sorted_indx)), desc='writing frames', leave=False):
             curr_indx = sorted_indx[i]*args.stride
             try:
