@@ -164,9 +164,6 @@ def fes_gen_fes(pos_cvs_fes, pos_ener):
     a_fes, b_fes, ener = np.loadtxt(args.fes, unpack=True, usecols=(*pos_cvs_fes, pos_ener), dtype=float)
     dimX, dimY, ct2 = 0, 1, 0
     count1 = count(0)
-    for i in range(len(ener)):
-        if not np.isfinite(ener[i]):
-            raise Exception('Non-finite value (NaN or inf) in FES-file')
         
     if (b_fes[0] == b_fes[1]):
         while b_fes[next(count1)] == b_fes[0]:
@@ -481,12 +478,12 @@ if __name__ == '__main__':
     parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b)
 
     if args.thresh == None:
-        if not args.fes == None:
+        if not np.any(np.isfinite(ener2d)):
             max_ener = np.max(ener2d)
             args.thresh = max_ener - abs(max_ener-np.min(ener2d))*(1-1/12)
             stdout('automatically determined', end=' ') 
         else:
-            raise Exception('Cannot use automatic threshold detection with histogram mode')
+            raise Exception('Cannot use automatic threshold with non-finite energy values in FES')
     stdout(f'threshold value: {round(args.thresh,3)} a.U.')
 
     mask_valid = ener2d < args.thresh  
