@@ -42,18 +42,18 @@ parser.add_argument('-fes', '--fes', dest='fes', default=None,
 parser.add_argument('-cv', '--colvar', dest='colvar', default='COLVAR', required=True, nargs='+',
                     help='COLVAR-file in the MD-output-directory. DEFAULT: "COLVAR".', type=str)
 
-parser.add_argument('-col, --column', dest='column', default=None,
-                    help='Columns for CV1;CV2 (colvar) or CV1;CV2;Energy (fes). Expects 2 integers '\
-                        '(custom colvar columns), 3 integers (custom fes columns) or 5 integers (custom colvar and fes) '\
-                            'delimited by commas. First column is denoted 1. DEFAULT: "1,2 and 1,2,3"')
+parser.add_argument('-col, --column', dest='column', default=None, type=str,
+                    help='Columns for CV1,CV2,BIAS,RCT (only colvar+reweighting), or CV1,CV2 (only colvar), '\
+                        'or CV1(colvar),CV2(colvar),CV1(fes),CV2(fes),Energy (colvar+fes). ' \
+                            'Delimited by commas. First column is denoted 1. DEFAULT: 1,2,1,2,3')
 
 # TUNING
 parser.add_argument('-thr', '--thresh', dest='thresh', default=None,
-                    help='Specifies threshold for assigning. Input value has to correspond with values in FES-file. '\
+                    help='Specifies threshold for assigning. Input value must correspond to values in FES-file. '\
                     'DEFAULT: Lowest 1/12 of the energy span.', type=float)
     
 parser.add_argument('-pbc', '--pbc', dest='pbc', action='store_true',
-                    help='Use this flag when the FES is periodic.')
+                    help='Use this flag if the FES is periodic.')
     
 parser.add_argument('-mind', '--mindist', dest='mindist', default=None,
                     help='Smallest allowed distance at which areas are considered separate minima (in CV units). '\
@@ -78,6 +78,9 @@ parser.add_argument('-dim', '--dim', dest='dims', default='500,500',
 
 parser.add_argument('-md', '--md', dest='md_dir', default=os.getcwd(),
                     help='Working path. DEFAULT: Current directory path.', type=str)
+
+parser.add_argument('-kbt', '--kBT', dest='kbt', default=None, type=float,
+                    help='Boltzmann-constant * Temperature, only needed if you are doing reweighting')
 
 args = parser.parse_args()
 
@@ -137,12 +140,18 @@ def pos_polygon(parameters, pts):
     return set(all_ids)
 
 
-def fes_gen_histo(a,b):
+def fes_gen_histo(a,b,bias,rct,kBT):
     start_temp = perf_counter()
-    print('generating histogram ... ', end='', flush=True)
     dimX, dimY = int(args.dims.split(',')[0]), int(args.dims.split(',')[1])
 
-    histo, xedges, yedges = np.histogram2d(a, b, bins=(dimX,dimY), range=((min(a),max(a)),(min(b),max(b))), density=True)
+    if np.any(bias):
+        print('generating reweighted histogram ... ', end='', flush=True)
+        histo, xedges, yedges = np.histogram2d(a, b, bins=(dimX,dimY), 
+                                              range=((min(a),max(a)),(min(b),max(b))), weights=np.exp((bias-rct)/kBT))
+    else:
+        print('generating normal histogram ... ', end='', flush=True)
+        histo, xedges, yedges = np.histogram2d(a, b, bins=(dimX,dimY), 
+                                              range=((min(a),max(a)),(min(b),max(b))), density=True)
     xcenters = (xedges[:-1]+xedges[1:])/2
     ycenters = (yedges[:-1]+yedges[1:])/2
     tolX = abs(xcenters[0]-xcenters[1])/2
@@ -155,7 +164,9 @@ def fes_gen_histo(a,b):
     coords = np.flipud(np.swapaxes(coords, 0, 1))
 
     histo[histo == 0] = np.nan
-    ener2d = np.flipud(-np.log(histo.T))
+    if kBT is None:
+        kBT = 1
+    ener2d = np.flipud(-kBT*np.log(histo.T))
     print(f'done in {round(perf_counter() - start_temp,2)} s')
     return (dimX, dimY, tolX, tolY, min_a, min_b, max_a, max_b, fullX, fullY), ener2d, coords
 
@@ -436,32 +447,51 @@ if __name__ == '__main__':
     os.chdir(args.md_dir)
     args.colvar = sorted(args.colvar, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
 
-    pos_cvs_fes = (0,1)
-    pos_ener = 2
-    pos_cvs_colv = (0,1)
-    if args.column:
-        all_custom_pos = [int(pos)-1 for pos in args.column.split(',')]
-        if len(all_custom_pos) == 2:
-            pos_cvs_colv = all_custom_pos
-        elif len(all_custom_pos) == 3:
-            pos_cvs_fes = all_custom_pos[:2]
-            pos_ener = all_custom_pos[2]
+
+    if args.fes is None:
+        if args.column is None:
+            pos_cvs_colv = (0,1)
         else:
-            pos_cvs_fes = all_custom_pos[2:4]
-            pos_ener = all_custom_pos[4]
-            pos_cvs_colv = all_custom_pos[:2]
+            pos_cvs_colv = [int(pos)-1 for pos in args.column.split(',')]
+        assert len(pos_cvs_colv) in (2,4), "Expects either 2 (no reweighting) or 4 (reweighting) COLVAR columns when no FES given"
+    else:
+        if args.column is None:
+            pos_cvs_colv = (0,1)
+            pos_cvs_fes = (0,1)
+            pos_ener = 2
+        else:
+            pos_cvs_pos = [int(pos)-1 for pos in args.column.split(';')]
+            assert len(pos_cvs_pos) == 5, "Expects 5 columns (CV1(colvar),CV2(colvar),CV1(fes),CV2(fes),Energy)"
+            pos_cvs_fes = pos_cvs_pos[2:4]
+            pos_ener = pos_cvs_pos[4]
+            pos_cvs_colv = pos_cvs_pos[:2]
 
     start2 = perf_counter()
     print('reading colvar file ... ' , end='', flush=True)
-    a, b = [], []
-    for element in args.colvar:
-        try:
-            a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float)
-        except UnicodeDecodeError:
-            tmp = np.load(element)
-            a_tmp, b_tmp = tmp[:,0],tmp[:,1]
-        a.append(a_tmp)
-        b.append(b_tmp)
+    a, b, bias, rct = [], [], [], []
+    if len(pos_cvs_colv) == 2:
+        for element in args.colvar:
+            try:
+                a_tmp, b_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float)
+            except UnicodeDecodeError:
+                tmp = np.load(element)
+                a_tmp, b_tmp = tmp[:,0],tmp[:,1]
+            a.append(a_tmp)
+            b.append(b_tmp)
+    else:
+        assert args.kbt is not None, 'kBT must be given when doing reweighting'
+        for element in args.colvar:
+            try:
+                a_tmp, b_tmp, bias_tmp, rct_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float, skiprows=1)
+            except UnicodeDecodeError:
+                tmp = np.load(element)
+                a_tmp, b_tmp, bias, rct = tmp[:,0],tmp[:,1],tmp[:,2],tmp[:,3]
+            a.append(a_tmp)
+            b.append(b_tmp)
+            bias.append(bias_tmp)
+            rct.append(rct_tmp)
+        bias = np.concatenate(bias)
+        rct = np.concatenate(rct)
     
     a = np.concatenate(a)
     b = np.concatenate(b)
@@ -469,21 +499,18 @@ if __name__ == '__main__':
 
     single = False
     if args.stride > 1:
-        a, b = a[::args.stride], b[::args.stride]
+        a, b, bias, rct = a[::args.stride], b[::args.stride], bias[::args.stride], rct[::args.stride]
         print(f'applied {args.stride} stride')
     elif args.stride == 0:
         args.stride = 1
         single = True
 
-    parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b)
+    parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b,bias,rct,args.kbt)
 
-    if args.thresh == None:
-        if not np.any(np.isfinite(ener2d)):
-            max_ener = np.max(ener2d)
-            args.thresh = max_ener - abs(max_ener-np.min(ener2d))*(1-1/12)
-            stdout('automatically determined', end=' ') 
-        else:
-            raise Exception('Cannot use automatic threshold with non-finite energy values in FES')
+    if args.thresh is None:
+        max_ener = np.nanmax(ener2d)
+        args.thresh = max_ener - abs(max_ener-np.nanmin(ener2d))*(1-1/12)
+        stdout('automatically determined', end=' ') 
     stdout(f'threshold value: {round(args.thresh,3)} a.U.')
 
     mask_valid = ener2d < args.thresh  
@@ -670,7 +697,7 @@ if __name__ == '__main__':
 
     if not args.fes_png == 'False':
         plt.figure(figsize=(8,6), dpi=300)
-        plt.imshow(ener2d, interpolation='none', cmap='nipy_spectral')
+        plt.imshow(ener2d, interpolation='gaussian', cmap='nipy_spectral')
         plt.xticks(np.linspace(-0.5,parameters[0]-0.5,5),np.round(np.linspace(parameters[4],parameters[6],5),3))
         plt.yticks(np.linspace(-0.5,parameters[1]-0.5,5),np.round(np.linspace(parameters[7],parameters[5],5),3))
         plt.xlabel('CV1 [a.U.]')
@@ -678,7 +705,7 @@ if __name__ == '__main__':
         plt.axis('tight')
         plt.title(f'threshold: {round(args.thresh,3)} a.U.')
         for i in range(len(exteriors_x)):
-            plt.plot(exteriors_x[i], exteriors_y[i], '-', color='white', lw=0.5)
+            plt.plot(exteriors_x[i], exteriors_y[i], '.', color='white', ms=1.5)
         cb = plt.colorbar(label='free energy [a.U.]', format="{x:.1f}")
         tick_locator = ticker.MaxNLocator(nbins=8)
         cb.locator = tick_locator
