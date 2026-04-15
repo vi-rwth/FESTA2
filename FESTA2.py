@@ -378,7 +378,7 @@ def printout_custom(data):
         with open(currfile, 'wb') as minfile:
             file_indices = np.searchsorted(cumsum_traj, curr_indx, side='right')
             for j,idx in enumerate(curr_indx):
-                file_seek_idx = idx-cumsum_traj[file_indices[j]-1] if file_indices[j] > 0 else idx
+                file_seek_idx = int(idx-cumsum_traj[file_indices[j]-1]) if file_indices[j] > 0 else idx
                 if not file_indices[j] == current_file_idx:
                     if ftraj:
                         ftraj.close()
@@ -446,7 +446,8 @@ if __name__ == '__main__':
     stdout(f'working directory: {args.md_dir}', start='\n')
     os.chdir(args.md_dir)
     args.colvar = sorted(args.colvar, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
-  
+
+
     if args.fes is None:
         if args.column is None:
             pos_cvs_colv = (0,1)
@@ -459,7 +460,7 @@ if __name__ == '__main__':
             pos_cvs_fes = (0,1)
             pos_ener = 2
         else:
-            pos_cvs_pos = [int(pos)-1 for pos in args.column.split(';')]
+            pos_cvs_pos = [int(pos)-1 for pos in args.column.split(',')]
             assert len(pos_cvs_pos) == 5, "Expects 5 columns (CV1(colvar),CV2(colvar),CV1(fes),CV2(fes),Energy)"
             pos_cvs_fes = pos_cvs_pos[2:4]
             pos_ener = pos_cvs_pos[4]
@@ -696,7 +697,7 @@ if __name__ == '__main__':
 
     if not args.fes_png == 'False':
         plt.figure(figsize=(8,6), dpi=300)
-        plt.imshow(ener2d, interpolation='gaussian', cmap='nipy_spectral')
+        plt.imshow(ener2d, interpolation='none', cmap='nipy_spectral')
         plt.xticks(np.linspace(-0.5,parameters[0]-0.5,5),np.round(np.linspace(parameters[4],parameters[6],5),3))
         plt.yticks(np.linspace(-0.5,parameters[1]-0.5,5),np.round(np.linspace(parameters[7],parameters[5],5),3))
         plt.xlabel('CV1 [a.U.]')
@@ -704,8 +705,8 @@ if __name__ == '__main__':
         plt.axis('tight')
         plt.title(f'threshold: {round(args.thresh,3)} a.U.')
         for i in range(len(exteriors_x)):
-            plt.plot(exteriors_x[i], exteriors_y[i], '.', color='white', ms=1.5)
-        cb = plt.colorbar(label='free energy [a.U.]', format="{x:.1f}")
+            plt.plot(exteriors_x[i], exteriors_y[i], '-', ms=1.5)
+        cb = plt.colorbar(label='Energy [a.U.]', format="{x:.1f}")
         tick_locator = ticker.MaxNLocator(nbins=8)
         cb.locator = tick_locator
         cb.update_ticks()    
@@ -765,7 +766,7 @@ if __name__ == '__main__':
                     initargs=(format,seek_offset,cumsum_traj,args.traj)) as pool:
             with tqdm.tqdm(total=len(sorted_indx)*usable_cpu, desc='writing frames', leave=False) as pbar:
                 for i in range(len(sorted_indx)):
-                    indxsplit = np.array_split(sorted_indx[i]*args.stride, usable_cpu)
+                    indxsplit = np.array_split(np.array(sorted_indx[i])*args.stride, usable_cpu)
                     with open(f'minima/min_{i}.'+format, 'wb') as outfile:
                         for filename in pool.imap_unordered(printout_custom, enumerate(indxsplit)):
                             pbar.update(1)
