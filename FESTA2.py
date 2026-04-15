@@ -446,8 +446,7 @@ if __name__ == '__main__':
     stdout(f'working directory: {args.md_dir}', start='\n')
     os.chdir(args.md_dir)
     args.colvar = sorted(args.colvar, key=lambda el:[int(c) if c.isdigit() else c for c in split(r'(\d+)', el)])
-
-
+  
     if args.fes is None:
         if args.column is None:
             pos_cvs_colv = (0,1)
@@ -482,7 +481,7 @@ if __name__ == '__main__':
         assert args.kbt is not None, 'kBT must be given when doing reweighting'
         for element in args.colvar:
             try:
-                a_tmp, b_tmp, bias_tmp, rct_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float, skiprows=1)
+                a_tmp, b_tmp, bias_tmp, rct_tmp = np.loadtxt(element, unpack=True, usecols=pos_cvs_colv, dtype=float)
             except UnicodeDecodeError:
                 tmp = np.load(element)
                 a_tmp, b_tmp, bias, rct = tmp[:,0],tmp[:,1],tmp[:,2],tmp[:,3]
