@@ -1,33 +1,30 @@
-To the published version: https://github.com/vi-rwth/FESTA.git \
-To the publication: https://pubs.acs.org/doi/full/10.1021/acs.jcim.4c01022
+# FESTA2
 
-Main differences:
-- no PLUMED dependency anymore:
-  - if no FES-file provided: histogram creation from COLVAR-file, reweighting possible!
-  - `--column <str>`: sets the column index (first index is 1, not 0) for COLVAR or COLVAR+FES.
-  - `--kBT <float>`: sets the kB*T value for reweighting, specify the BIAS and RCT columns in `--column` as well!
-  - CAUTION: This means that COLVAR- and FES-files are not expected to have any headers!
-  - CAUTION: Usually PLUMED prints the timestep in the first column in COLVAR, adjust `--column` accordingly!
-- new formats supported:
-  - NumPy NPY-format for COLVAR-files (shape(N_frames, N_var)) with N_var = 2 (no reweighting) or 4 (reweighting)
-  - CFG-format for trajectories (https://doi.org/10.1063/5.0155887) read+write
-- new features:
-  - `--png only`: only generate preview of Polygons+FES (no frame separation).
-  - `--stride 0`: only outputs the single most representative frame of each minimum.
-  - `--thresh_low <float>`: omit all areas with energies lower than `<float>`. Useful for transition state analysis.
-- increased accuracy:
-  - no convex hull approximation anymore, if creation of single Polygon fails -> MultiPolygon
-- increased performance:
-  - spatial hashing algorithm -> not all frames are evaluated
-  - polygon distance calculation in chunks using all cores
-  - frame extraction/printing for CustomWriter in chunks using all cores (cfg, pdb, lammpstrj)
-  - various other minor performance improvements
-- quality of life improvements:
-  - multiple trajectory- and COLVAR-files (same format) are now accepted (bash glob supported)
-  - FES-png now shows the true (Multi)Polygon outlines instead of raw selected frames
-  - `--pbc` now denotes pbc=True, no flag pbc=False
-  - FES-file is now allowed to have non-finite energy values (e.g. NaNs)
-  - automatic threshold determination now always works
+> **Note:** This version is Work-in-Progress and subject to change at any point.
 
-This is still work-in-progress and subject to change at any point \
-If you are using this in your work, please cite the published version above
+* **Published repository:** [vi-rwth/FESTA](https://github.com/vi-rwth/FESTA.git)
+* **Publication:** [ACS JCIM (10.1021/acs.jcim.4c01022)](https://pubs.acs.org/doi/full/10.1021/acs.jcim.4c01022)
+
+### Core Changes & Usage
+* **No PLUMED dependency:** Histogram creation and reweighting are possible directly from a COLVAR file if no FES file is provided.
+  > **CAUTION:** COLVAR and FES files are expected to have no headers.
+* `--column <str>`: Sets the column index (1-indexed, not 0) for COLVAR or COLVAR+FES.
+  > **CAUTION:** PLUMED usually prints the timestep in the first column of the COLVAR file, adjust `--column` accordingly.
+* `--kBT <float>`: Sets the $k_B T$ value for reweighting. Requires specifying `BIAS` and `RCT` columns via `--column`.
+
+### Supported Formats
+* **NumPy (`.npy`):** Supported for COLVAR files. Shape must be `(N_frames, N_var)` where `N_var` is 2 (no reweighting) or 4 (reweighting).
+* **CFG-format:** Read/write support added for trajectories.
+* **Batch Input:** Multiple trajectory and COLVAR files (same format) are accepted via bash globbing.
+
+### New Features & Flags
+* `--png only`: Generates a preview of Polygons+FES without frame separation.
+* `--stride 0`: Outputs only the single most representative frame of each minimum.
+* `--thresh_low <float>`: Omits areas with energies lower than `<float>` (useful for transition state analysis).
+* `--pbc`: Standard flag indicating `pbc=True`.
+
+### Accuracy & Performance
+* **Exact Polygons:** Removed convex hull approximation. Uses `MultiPolygon` fallback if single Polygon creation fails. `FES-png` now displays true outlines.
+* **Multi-core Processing:** Polygon distance calculations and frame extraction/printing (`.cfg`, `.pdb`, `.lammpstrj`) execute in chunks utilizing all CPU cores.
+* **Spatial Hashing:** Optimized algorithm skips unnecessary frame evaluations for faster processing.
+* **Robustness:** FES files now accept non-finite energy values (e.g., NaNs), and automatic threshold determination works consistently.
