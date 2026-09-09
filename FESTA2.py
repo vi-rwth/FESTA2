@@ -508,8 +508,9 @@ if __name__ == '__main__':
     parameters, ener2d, coords = fes_gen_fes(pos_cvs_fes, pos_ener) if args.fes else fes_gen_histo(a,b,bias,rct,args.kbt)
 
     if args.thresh is None:
-        max_ener = np.nanmax(ener2d)
-        args.thresh = max_ener - abs(max_ener-np.nanmin(ener2d))*(1-1/12)
+        finite_ener = ener2d[np.isfinite(ener2d)]
+        max_ener = np.max(ener2d)
+        args.thresh = max_ener - abs(max_ener-np.min(finite_ener))*(1-1/12)
         stdout('automatically determined', end=' ') 
     stdout(f'threshold value: {round(args.thresh,3)} a.U.')
 
